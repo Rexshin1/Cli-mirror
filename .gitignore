@@ -1,0 +1,31 @@
+# Build artifacts
+build/
+uxplay/build/
+*.o
+*.a
+*.so
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# UxPlay is a git submodule - do not track its internals
+# uxplay/ is added as submodule, not raw copy
