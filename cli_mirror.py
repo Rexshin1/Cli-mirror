@@ -329,46 +329,109 @@ class BtHidMouse:
                 pass
 
 
-class MouseCapture:
+class EvdevInputCapture:
+    """Capture touchpad input via evdev — works on X11 and Wayland."""
+
     def __init__(self, bt: BtHidMouse):
         self.bt = bt
         self.running = False
+        self.device = None
+        self._thread = None
 
     def start(self):
         self.running = True
-        threading.Thread(target=self._loop, daemon=True).start()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
 
     def stop(self):
         self.running = False
+        if self.device:
+            try:
+                self.device.ungrab()
+                self.device.close()
+            except Exception:
+                pass
+            self.device = None
+
+    def _find_touchpad(self):
+        try:
+            from evdev import list_devices, InputDevice
+            for path in list_devices():
+                dev = InputDevice(path)
+                name = dev.name.lower()
+                if any(k in name for k in ['touchpad', 'touch pad', 'synaptics',
+                                           'alps', 'elan', 'input mouse']):
+                    return dev.path, dev.name
+            # Fallback: any device containing 'mouse' or 'touch'
+            for path in list_devices():
+                dev = InputDevice(path)
+                name = dev.name.lower()
+                if 'mouse' in name or 'touch' in name:
+                    return dev.path, dev.name
+        except ImportError:
+            pass
+        return None, None
 
     def _loop(self):
         try:
-            from Xlib import display, X
-            d = display.Display()
-            root = d.screen().root
-            root.change_attributes(event_mask=(
-                X.PointerMotionMask | X.ButtonPressMask | X.ButtonReleaseMask
-            ))
-            px, py = 0, 0
-            while self.running:
-                if d.pending_events():
-                    ev = d.next_event()
-                    if ev.type == X.MotionNotify:
-                        dx, dy = ev.root_x - px, ev.root_y - py
-                        if dx or dy:
-                            self.bt.move(dx, dy)
-                        px, py = ev.root_x, ev.root_y
-                    elif ev.type == X.ButtonPress:
-                        if ev.detail == 1: self.bt.send(buttons=1)
-                        elif ev.detail == 3: self.bt.send(buttons=2)
-                        elif ev.detail == 4: self.bt.scroll(-15)
-                        elif ev.detail == 5: self.bt.scroll(15)
-                    elif ev.type == X.ButtonRelease:
-                        self.bt.send(buttons=0)
-                else:
-                    time.sleep(0.002)
+            from evdev import InputDevice, ecodes
         except ImportError:
+            print(f"  {YELLOW}evdev not installed. Run: sudo pip3 install evdev{RESET}")
+            return
+
+        path, name = self._find_touchpad()
+        if not path:
+            print(f"  {RED}No touchpad found via evdev. Using /dev/input/mice fallback.{RESET}")
             self._fallback_loop()
+            return
+
+        try:
+            self.device = InputDevice(path)
+            self.device.grab()
+            print(f"  {GREEN}Touchpad captured via evdev: {name}{RESET}")
+        except Exception as e:
+            print(f"  {RED}Failed to grab touchpad: {e}{RESET}")
+            self._fallback_loop()
+            return
+
+        abs_x = abs_y = None
+        max_x = max_y = 0
+        prev_x = prev_y = 0
+
+        for event in self.device.read_loop():
+            if not self.running:
+                break
+            if event.type == ecodes.EV_ABS:
+                ev = event
+                if ev.code == ecodes.ABS_X:
+                    abs_x = ev.value
+                    if max_x == 0:
+                        max_x = max(1, ev.info.max)
+                elif ev.code == ecodes.ABS_Y:
+                    abs_y = ev.value
+                    if max_y == 0:
+                        max_y = max(1, ev.info.max)
+                if abs_x is not None and abs_y is not None and max_x and max_y:
+                    dx = int((abs_x - prev_x) / max_x * 127)
+                    dy = int((abs_y - prev_y) / max_y * 127)
+                    if dx or dy:
+                        self.bt.move(dx, dy)
+                    prev_x, prev_y = abs_x, abs_y
+            elif event.type == ecodes.EV_REL:
+                ev = event
+                if ev.code == ecodes.REL_X:
+                    self.bt.move(max(-127, min(127, ev.value)), 0)
+                elif ev.code == ecodes.REL_Y:
+                    self.bt.move(0, max(-127, min(127, ev.value)))
+            elif event.type == ecodes.EV_KEY:
+                ev = event
+                if ev.value == 1:  # key press
+                    if ev.code == ecodes.BTN_LEFT:
+                        self.bt.click(1)
+                    elif ev.code == ecodes.BTN_RIGHT:
+                        self.bt.click(2)
+                    elif ev.code == ecodes.BTN_MIDDLE:
+                        self.bt.click(3)
 
     def _fallback_loop(self):
         try:
@@ -378,11 +441,76 @@ class MouseCapture:
                     if len(data) == 3:
                         b, dx, dy = struct.unpack("3b", data)
                         self.bt.send(
-                            buttons=((b&1)|(((b>>1)&1)<<1)|(((b>>2)&1)<<2)),
+                            buttons=((b & 1) | (((b >> 1) & 1) << 1) | (((b >> 2) & 1) << 2)),
                             dx=dx, dy=-dy
                         )
         except Exception as e:
             print(f"  {RED}Mouse capture error: {e}{RESET}")
+
+
+class KeyboardInputCapture:
+    """Capture arrow key / enter / space input via evdev for touchpad-free control."""
+
+    def __init__(self, bt: BtHidMouse, step: int = 15):
+        self.bt = bt
+        self.running = False
+        self.step = step
+        self._thread = None
+
+    def start(self):
+        self.running = True
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self.running = False
+
+    def _loop(self):
+        try:
+            from evdev import InputDevice, ecodes, list_devices
+        except ImportError:
+            return
+
+        # Find keyboard device
+        keyboard_path = None
+        for path in list_devices():
+            try:
+                dev = InputDevice(path)
+                caps = dev.capabilities()
+                if ecodes.EV_KEY in caps and ecodes.EV_REP in caps:
+                    # Skip touchpad/mouse devices
+                    name = dev.name.lower()
+                    if not any(k in name for k in ['touchpad', 'mouse', 'synaptics', 'alps', 'elan']):
+                        keyboard_path = path
+                        break
+            except Exception:
+                continue
+
+        if not keyboard_path:
+            return
+
+        dev = InputDevice(keyboard_path)
+        dev.grab()
+        print(f"  {GREEN}Keyboard captured via evdev{RESET}")
+
+        for event in dev.read_loop():
+            if not self.running:
+                break
+            if event.type == ecodes.EV_KEY and event.value == 1:
+                if event.code == ecodes.KEY_LEFT:
+                    self.bt.move(-self.step, 0)
+                elif event.code == ecodes.KEY_RIGHT:
+                    self.bt.move(self.step, 0)
+                elif event.code == ecodes.KEY_UP:
+                    self.bt.move(0, -self.step)
+                elif event.code == ecodes.KEY_DOWN:
+                    self.bt.move(0, self.step)
+                elif event.code == ecodes.KEY_ENTER:
+                    self.bt.click(1)
+                elif event.code == ecodes.KEY_SPACE:
+                    self.bt.click(1)
+                elif event.code == ecodes.KEY_TAB:
+                    self.bt.click(2)
 
 
 # ════════════════════════════════════════════════════════════════════════════════
@@ -447,6 +575,8 @@ def main():
                         help="Wi-Fi password for QR code")
     parser.add_argument("--no-bt", action="store_true",
                         help="Disable Bluetooth mouse emulation (mirror only)")
+    parser.add_argument("--keyboard", action="store_true",
+                        help="Enable keyboard arrow-key control via evdev")
     args = parser.parse_args()
 
     local_ip, iface = get_local_ip()
@@ -520,20 +650,26 @@ def main():
                 while True:
                     try:
                         peer = bt_mouse.listen()
-                        print(f"\n  [{GREEN}BT Mouse{RESET}] {BOLD}Connected! Mouse control active.{RESET}")
-                        print(f"  Left click=tap  Right click=hold  Scroll=scroll\n")
-                        nonlocal capture
-                        capture = MouseCapture(bt_mouse)
+                        print(f"\n  [{GREEN}BT Mouse{RESET}] {BOLD}Connected! Touchpad/keyboard control active.{RESET}")
+                        print(f"  Touchpad=tap  Click=tap  Scroll=scroll\n")
+                        nonlocal capture, kb_capture
+                        capture = EvdevInputCapture(bt_mouse)
                         capture.start()
+                        if args.keyboard:
+                            kb_capture = KeyboardInputCapture(bt_mouse)
+                            kb_capture.start()
                         # Wait until disconnected
                         while bt_mouse.connected:
                             time.sleep(1)
                         print(f"  [{YELLOW}BT Mouse{RESET}] Disconnected. Waiting for reconnect...")
                         if capture:
                             capture.stop()
+                        if kb_capture:
+                            kb_capture.stop()
                     except Exception as e:
                         time.sleep(3)
 
+            kb_capture = None
             threading.Thread(target=_bt_listen_loop, daemon=True).start()
         else:
             print(f"  {YELLOW}No iPhone found via Bluetooth. Running in mirror-only mode.{RESET}")
@@ -548,6 +684,14 @@ def main():
     print(f"  2. Open Control Center on iPhone (swipe down).")
     print(f"  3. Tap {BOLD}Screen Mirroring{RESET} → select {BOLD}{YELLOW}{args.name}{RESET}.")
     print(f"  4. Your iPhone screen will appear in a new window!")
+    print(f"\n  {BOLD}Controls:{RESET}")
+    print(f"    {DIM}Touchpad     → move cursor{RESET}")
+    print(f"    {DIM}Tap/Click    → tap on iPhone{RESET}")
+    print(f"    {DIM}Scroll wheel → scroll{RESET}")
+    if args.keyboard:
+        print(f"    {DIM}Arrow keys   → move cursor{RESET}")
+        print(f"    {DIM}Enter/Space  → tap{RESET}")
+        print(f"    {DIM}Tab          → right-click{RESET}")
     print(f"\n  {DIM}Press Ctrl+C to stop.{RESET}\n")
 
     # ── Signal handler ───────────────────────────────────────────────────────
@@ -555,6 +699,8 @@ def main():
         print(f"\n{YELLOW}Shutting down cli-mirror...{RESET}")
         if capture:
             capture.stop()
+        if kb_capture:
+            kb_capture.stop()
         if bt_mouse:
             bt_mouse.cleanup()
         if airplay_proc:

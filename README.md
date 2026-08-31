@@ -2,7 +2,7 @@
 
 Aplikasi CLI ringan untuk Linux yang memungkinkan Anda menerima screen mirroring dari perangkat iOS (iPhone/iPad) ke Ubuntu. Tidak perlu install aplikasi apa pun di iPhone, cukup menggunakan fitur Screen Mirroring bawaan iOS melalui protokol AirPlay.
 
-Dilengkapi dengan modul kontrol mouse via Bluetooth, sehingga Anda bisa menggerakkan dan mengklik layar iPhone langsung dari mouse di Ubuntu.
+Dilengkapi dengan modul kontrol via touchpad laptop dan keyboard, serta mouse Bluetooth, sehingga Anda bisa menggerakkan dan mengklik layar iPhone langsung dari laptop Anda.
 
 ![Platform](https://img.shields.io/badge/platform-Linux-blue)
 ![Language](https://img.shields.io/badge/language-C%2B%2B%20%2F%20Python-informational)
@@ -13,7 +13,8 @@ Dilengkapi dengan modul kontrol mouse via Bluetooth, sehingga Anda bisa menggera
 ## Fitur
 
 - **AirPlay Mirroring** — Menampilkan layar iPhone di Ubuntu menggunakan protokol AirPlay bawaan iOS. Tidak perlu aplikasi tambahan di sisi iPhone.
-- **Kontrol Mouse via Bluetooth** — Gunakan mouse di Ubuntu untuk tap, klik, dan scroll di layar iPhone seperti Samsung DeX.
+- **Kontrol Mouse via Touchpad & Keyboard** — Gunakan touchpad laptop atau tombol keyboard arrow untuk tap, klik, dan scroll di layar iPhone seperti Samsung DeX.
+- **Kontrol Mouse via Bluetooth** — Gunakan mouse Bluetooth di Ubuntu untuk tap, klik, dan scroll di layar iPhone seperti Samsung DeX.
 - **Auto-detect iPhone** — Memindai dan melakukan pairing dengan iPhone secara otomatis melalui Bluetooth.
 - **QR Code Wi-Fi** — Menampilkan QR code di terminal agar iPhone dapat bergabung ke jaringan Wi-Fi yang sama secara otomatis.
 - **Latensi Rendah** — Dekoding H.264 hardware-accelerated menggunakan GStreamer.
@@ -62,7 +63,8 @@ sudo python3 cli_mirror.py
 Program akan:
 1. Menjalankan AirPlay receiver yang bisa dideteksi oleh iPhone.
 2. Memindai iPhone terdekat via Bluetooth dan melakukan pairing otomatis.
-3. Mengaktifkan kontrol mouse: gerakan dan klik mouse di Ubuntu dikirim ke iPhone.
+3. Mengaktifkan kontrol: gerakan touchpad laptop, klik touchpad, atau scroll di Ubuntu dikirim ke iPhone.
+   Gunakan `--keyboard` untuk kontrol via tombol arrow keyboard.
 
 Setelah program berjalan, di iPhone:
 1. Buka Control Center (geser layar ke bawah).
@@ -81,27 +83,33 @@ sudo python3 cli_mirror.py [opsi]
   -p, --port PORT         Port AirPlay RTSP (default: 7000)
   --ssid NAMA_WIFI        Nama Wi-Fi untuk ditampilkan sebagai QR code
   --pass PASSWORD         Password Wi-Fi untuk QR code
-  --no-bt                 Nonaktifkan kontrol mouse Bluetooth (hanya mirroring)
+  --no-bt                 Nonaktifkan kontrol mouse/touchpad Bluetooth (hanya mirroring)
+  --keyboard              Aktifkan kontrol via tombol arrow keyboard
   -h, --help              Tampilkan bantuan
 
 Contoh:
   sudo python3 cli_mirror.py --name "LaptopSaya"
   sudo python3 cli_mirror.py --ssid "NamaWifi" --pass "passwordwifi"
   sudo python3 cli_mirror.py --no-bt
+  sudo python3 cli_mirror.py --keyboard
 ```
 
 ---
 
-## Kontrol Mouse
+## Kontrol Mouse & Touchpad
 
-| Aksi di Ubuntu        | Efek di iPhone              |
-|-----------------------|-----------------------------|
-| Gerak mouse           | Menggerakkan kursor          |
-| Klik kiri             | Tap                         |
-| Klik kanan            | Tap dan tahan               |
-| Scroll wheel atas/bawah | Scroll halaman            |
+| Aksi di Ubuntu/Touchpad   | Efek di iPhone              |
+|---------------------------|-----------------------------|
+| Gerak touchpad            | Menggerakkan kursor         |
+| Tap touchpad              | Tap                         |
+| Scroll wheel              | Scroll halaman              |
+| Tombol arrow (keyboard)   | Menggerakkan kursor         |
+| Enter / Space (keyboard)  | Tap                         |
+| Tab (keyboard)            | Tap dan tahan (kanan)       |
 
-Catatan: Saat Bluetooth mouse terhubung, akan muncul kursor bulat kecil (AssistiveTouch) di layar iPhone. Ini normal.
+**Opsi keyboard:** Jalankan dengan `sudo python3 cli_mirror.py --keyboard` untuk menggunakan tombol arrow keyboard sebagai pengganti touchpad.
+
+Catatan: Saat Bluetooth mouse/touchpad terhubung, akan muncul kursor bulat kecil (AssistiveTouch) di layar iPhone. Ini normal.
 
 ---
 
@@ -113,8 +121,8 @@ iPhone (AirPlay Sender)
     |--- Wi-Fi (AirPlay / RTSP) ---> Ubuntu: UxPlay C++ Engine ---> Window GStreamer
     |                                         (Decode H.264 + render)
     |
-    |--- Bluetooth (HID Mouse) <---- Ubuntu: bt_mouse.py (L2CAP HID)
-         (Kirim tap/klik/scroll)              (Tangkap event mouse)
+    |--- Bluetooth (HID Mouse/Touchpad) <---- Ubuntu: cli_mirror.py (L2CAP HID via evdev)
+         (Kirim tap/klik/scroll)              (Tangkap event touchpad/keyboard)
 ```
 
 ---
@@ -124,7 +132,7 @@ iPhone (AirPlay Sender)
 ```
 cli-mirror/
 ├── cli_mirror.py      # Entry point utama (orchestrator AirPlay + Bluetooth)
-├── bt_mouse.py        # Modul emulasi Bluetooth HID Mouse
+├── bt_mouse.py        # Modul emulasi Bluetooth HID Mouse (standalone, juga support evdev)
 ├── install.sh         # Installer dependensi dan builder (jalankan sekali)
 ├── uxplay/            # C++ AirPlay core engine (git submodule dari UxPlay)
 └── src/core/          # Modul mDNS discovery kustom (C)
@@ -146,9 +154,11 @@ cli-mirror/
 - Jalankan: `sudo rfkill unblock bluetooth`
 - Lalu restart: `sudo systemctl restart bluetooth`
 
-**Mouse tidak bisa mengontrol iPhone?**
+**Touchpad/Keyboard tidak bisa mengontrol iPhone?**
 - Pastikan baris `DisablePlugins = input` ada di `/etc/bluetooth/main.conf`
 - Aktifkan AssistiveTouch di iPhone: Pengaturan > Aksesibilitas > AssistiveTouch > Aktifkan
+- Pastikan `evdev` terinstall: `sudo pip3 install evdev`
+- Jika menggunakan Wayland, evdev adalah cara yang benar untuk menangkap input
 
 **Layar Ubuntu mati saat layar iPhone dikunci?**
 - Atur Auto-Lock iPhone ke "Jangan Pernah": Pengaturan > Tampilan & Kecerahan > Kunci Otomatis > Jangan Pernah

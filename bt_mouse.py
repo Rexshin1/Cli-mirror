@@ -539,10 +539,10 @@ def main():
     capture = X11MouseCapture(bt_mouse, iphone_res=(iw, ih))
     capture.start()
 
-    print(f"[{GREEN}✓{RESET}] Mouse capture active. Move your mouse over the mirroring window!")
-    print(f"    Left click   → tap on iPhone")
-    print(f"    Right click  → tap and hold")
-    print(f"    Scroll wheel → scroll on iPhone")
+    print(f"[{GREEN}✓{RESET}] Touchpad capture active. Move your finger on the touchpad!")
+    print(f"    Tap on touchpad   → tap on iPhone")
+    print(f"    Right click       → tap and hold")
+    print(f"    Scroll wheel      → scroll on iPhone")
     print(f"    Press Ctrl+C to stop.\n")
 
     # Keep main thread alive

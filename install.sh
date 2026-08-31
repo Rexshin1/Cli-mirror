@@ -69,8 +69,8 @@ print_ok "System packages installed."
 
 # ── 2. Python Dependencies ───────────────────────────────────────────────────
 print_step "Installing Python packages..."
-pip3 install python-xlib --break-system-packages -q 2>/dev/null || \
-    pip3 install python-xlib -q 2>/dev/null || true
+pip3 install python-xlib evdev --break-system-packages -q 2>/dev/null || \
+    pip3 install python-xlib evdev -q 2>/dev/null || true
 print_ok "Python packages installed."
 
 # ── 3. Build C++ AirPlay Engine ──────────────────────────────────────────────
